@@ -1,28 +1,29 @@
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from database.engine import get_session
 from database.models import Question, FAQ
-from aiogram import Router, F
-import time
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Router, F, Bot
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command, CommandStart, StateFilter
-from config import settings
 from aiogram.enums import ChatType
+from config import settings
+import logging
+import time
+from aiogram.exceptions import TelegramBadRequest
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = Router()
 
 GROUP_CHAT_ID = settings.GROUP_CHAT_ID
 ADMINS = settings.ADMINS
 
-
+# --- FSM ---
 class AskQuestion(StatesGroup):
     waiting_for_question = State()
     waiting_for_anon_choice = State()
-    waiting_for_answer = State()
-    waiting_for_reply_text = State()
-    waiting_for_reply_id = State()
 
 class FAQAdmin(StatesGroup):
     waiting_for_faq_question = State()
@@ -32,13 +33,25 @@ class FAQAdmin(StatesGroup):
     waiting_for_faq_edit_answer = State()
     waiting_for_faq_delete_id = State()
 
-anon_kb = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(text="Анонимно 🤫", callback_data="ask_anon"),
-            InlineKeyboardButton(text="Неанонимно 🙂", callback_data="ask_not_anon")
-        ]
-    ]
+# --- Клавиатуры ---
+main_menu_reply_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="FAQ 📚"), KeyboardButton(text="Задать вопрос ✍️")]
+    ],
+    resize_keyboard=True
+)
+
+admin_menu_reply_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="FAQ 📚"), KeyboardButton(text="Задать вопрос ✍️"), KeyboardButton(text="Редактировать FAQ")]
+    ],
+    resize_keyboard=True
+)
+
+cancel_reply_kb = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="Отмена")]],
+    resize_keyboard=True,
+    one_time_keyboard=True
 )
 
 def get_reply_kb(question_id: int):
@@ -51,35 +64,13 @@ def get_reply_kb(question_id: int):
         ]
     )
 
-def get_faq_inline_kb(is_admin=False):
+def get_faq_inline_kb():
     kb = [
         [InlineKeyboardButton(text="FAQ 📚", callback_data="show_faq")],
         [InlineKeyboardButton(text="Задать вопрос ✍️", callback_data="ask_question")]
-    ]
-    if is_admin:
-        kb.append([InlineKeyboardButton(text="Редактировать FAQ", callback_data="admin_panel")])
+    ] 
+    
     return InlineKeyboardMarkup(inline_keyboard=kb)
-
-# Глобальный словарь: user_id -> question_id (для ответов в ЛС)
-reply_waiting = {}
-
-# Глобальный словарь: user_id -> время последнего вопроса (timestamp)
-last_question_time = {}
-
-# Клавиатура главного меню
-main_menu_kb = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="FAQ 📚", callback_data="show_faq")],
-        [InlineKeyboardButton(text="Задать вопрос ✍️", callback_data="ask_question")]
-    ]
-)
-
-# Клавиатура отмены для вопроса
-cancel_kb = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="Отмена", callback_data="cancel_ask")]
-    ]
-)
 
 admin_menu_kb = InlineKeyboardMarkup(
     inline_keyboard=[
@@ -89,103 +80,152 @@ admin_menu_kb = InlineKeyboardMarkup(
     ]
 )
 
-# Клавиатура после отправки вопроса
-after_question_kb = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="Задать ещё ✍️", callback_data="ask_question")],
-        [InlineKeyboardButton(text="FAQ 📚", callback_data="show_faq")]
-    ]
-)
+# --- Глобальные словари ---
+reply_waiting = {}
+last_question_time = {}
 
+# --- /start ---
 @router.message(CommandStart())
 async def start_cmd(msg: Message, state: FSMContext):
-    is_admin = msg.from_user.id in ADMINS
-    await msg.answer(
-        "Добро пожаловать! Выберите действие:",
-        reply_markup=get_faq_inline_kb(is_admin)
-    )
+    if msg.from_user.id in ADMINS:
+        await msg.answer("Добро пожаловать, админ! Выберите действие:", reply_markup=admin_menu_reply_kb)
+    else:
+        await msg.answer("Добро пожаловать! Выберите действие:", reply_markup=main_menu_reply_kb)
     await state.clear()
 
-@router.callback_query(F.data == "admin_panel")
-async def admin_panel_btn(callback: CallbackQuery):
-    if callback.from_user.id not in ADMINS:
-        await callback.answer()
+# --- FAQ ---
+async def show_faq_list(chat, is_admin=False):
+    async for session in get_session():
+        faqs = (await session.execute(select(FAQ))).scalars().all()
+
+    if not faqs:
+        text = "FAQ пока пуст."
+        if isinstance(chat, Message):
+            if is_admin:
+                await chat.answer(text, reply_markup=admin_menu_kb)
+            else:
+                await chat.answer(text)
+        else:
+            try:
+                if is_admin:
+                    await chat.message.edit_text(text, reply_markup=admin_menu_kb)
+                else:
+                    await chat.message.edit_text(text)
+            except TelegramBadRequest as e:
+                if "message is not modified" not in str(e):
+                    raise
         return
-    await callback.message.answer("Админ-панель FAQ:", reply_markup=admin_menu_kb)
+
+    text = "<b>FAQ 📚</b>\n\n"
+    for i, faq in enumerate(faqs, 1):
+        text += f"<b>{i}. {faq.question}</b>\n<blockquote>{faq.answer}</blockquote>\n\n"
+
+    if isinstance(chat, Message):
+        if is_admin:
+            await chat.answer(text, parse_mode="HTML", reply_markup=admin_menu_kb)
+        else:
+            await chat.answer(text, parse_mode="HTML")
+    else:
+        try:
+            if is_admin:
+                await chat.message.edit_text(text, parse_mode="HTML", reply_markup=admin_menu_kb)
+            else:
+                await chat.message.edit_text(text, parse_mode="HTML")
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                raise
+
+@router.message(lambda msg: msg.text == "FAQ 📚")
+async def faq_reply(msg: Message):
+    is_admin = msg.from_user.id in ADMINS
+    await show_faq_list(msg, is_admin=is_admin)
+
+@router.callback_query(F.data == "show_faq")
+async def faq_inline(callback: CallbackQuery):
+    await show_faq_list(callback, callback.from_user.id in ADMINS)
     await callback.answer()
 
-@router.callback_query(F.data == "ask_question")
-async def ask_question_btn(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
+# --- Задать вопрос ---
+async def start_question_flow(chat, state: FSMContext, user_id: int):
     now = time.time()
     last_time = last_question_time.get(user_id, 0)
+
     if now - last_time < 60:
-        await callback.answer(f"Можно задать вопрос раз в минуту! Подождите ещё {int(60 - (now - last_time))} сек.", show_alert=True)
+        text = f"Можно задать вопрос раз в минуту! Подождите ещё {int(60 - (now - last_time))} сек."
+        if isinstance(chat, CallbackQuery):
+            await chat.answer(text, show_alert=True)
+        else:
+            await chat.answer(text)
         return
+
     last_question_time[user_id] = now
-    await callback.message.edit_text("Напишите свой вопрос:", reply_markup=cancel_kb)
+    if isinstance(chat, CallbackQuery):
+        try:
+            await chat.message.edit_text("Напишите свой вопрос:")
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                raise
+    else:
+        await chat.answer("Напишите свой вопрос:", reply_markup=cancel_reply_kb)
+
     await state.set_state(AskQuestion.waiting_for_question)
+
+@router.message(lambda msg: msg.text == "Задать вопрос ✍️")
+async def ask_question_reply(msg: Message, state: FSMContext):
+    await start_question_flow(msg, state, msg.from_user.id)
+
+@router.callback_query(F.data == "ask_question")
+async def ask_question_inline(callback: CallbackQuery, state: FSMContext):
+    await start_question_flow(callback, state, callback.from_user.id)
     await callback.answer()
-
-@router.callback_query(F.data == "cancel_ask")
-async def cancel_ask(callback: CallbackQuery, state: FSMContext):
-    is_admin = callback.from_user.id in ADMINS
-    await callback.message.edit_text("Ввод вопроса отменён.", reply_markup=get_faq_inline_kb(is_admin))
-    await state.clear()
-
-@router.message(Command("get_id"))
-async def get_id_handler(msg: Message):
-    await msg.answer(f"ID этого чата: <code>{msg.chat.id}</code>", parse_mode="HTML")
 
 @router.message(AskQuestion.waiting_for_question)
 async def get_question(msg: Message, state: FSMContext):
     await state.update_data(question=msg.text)
-    await msg.answer("Ты хочешь задать вопрос анонимно?", reply_markup=anon_kb)
+    await msg.answer("Ты хочешь задать вопрос анонимно?",
+                     reply_markup=ReplyKeyboardMarkup(
+                         keyboard=[
+                             [KeyboardButton(text="Анонимно 🤫"), KeyboardButton(text="Неанонимно 🙂")]
+                         ],
+                         resize_keyboard=True
+                     ))
     await state.set_state(AskQuestion.waiting_for_anon_choice)
 
-@router.callback_query(F.data.in_(["ask_anon", "ask_not_anon"]))
-async def anon_choice(callback: CallbackQuery, state: FSMContext, bot):
+@router.message(lambda msg: msg.text in ["Анонимно 🤫", "Неанонимно 🙂"])
+async def anon_choice(msg: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     question = data.get("question")
-    is_anon = callback.data == "ask_anon"
-    username = callback.from_user.username or "Без ника"
-    user_id = callback.from_user.id
-    # Сохраняем вопрос в БД
+    is_anon = msg.text == "Анонимно 🤫"
+    username = msg.from_user.username or "Без ника"
+    user_id = msg.from_user.id
+
     async for session in get_session():
         q = Question(user_id=user_id, username=username, question=question, is_anon=is_anon)
         session.add(q)
         await session.commit()
         await session.refresh(q)
         question_id = q.id
-    # Форматирование
-    if is_anon:
-        head = f"<b><i>@{username} задал очередной вопрос:</i></b> 🤔"
-    else:
-        head = f"<b><i>{callback.from_user.full_name} (@{username}) задал очередной вопрос:</i></b> 🤔"
+
+    head = f"<b><i>Аноним задал вопрос:</i></b> 🤔" if is_anon else f"<b><i>{msg.from_user.full_name} (@{username}) задал вопрос:</i></b> 🤔"
     text = f'{head}\n\n<blockquote>{question}</blockquote>'
-    sent = await bot.send_message(
-        chat_id=GROUP_CHAT_ID,
-        text=text,
-        reply_markup=get_reply_kb(question_id),
-        parse_mode="HTML"
-    )
-    # Сохраняем id сообщения в группе
+
+    sent = await bot.send_message(GROUP_CHAT_ID, text, reply_markup=get_reply_kb(question_id), parse_mode="HTML")
+
     async for session in get_session():
         q = await session.get(Question, question_id)
         q.group_message_id = sent.message_id
         await session.commit()
-    await callback.message.answer("Вопрос отправлен в группу!", reply_markup=after_question_kb)
+
+    await msg.answer("Вопрос отправлен в группу!", reply_markup=main_menu_reply_kb)
     await state.clear()
 
+# --- Ответ на вопрос ---
 @router.callback_query(F.data.startswith("reply_"))
-async def reply_btn(callback: CallbackQuery, state: FSMContext, bot):
+async def reply_btn(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if callback.from_user.id not in ADMINS:
         await callback.answer("Только админ может отвечать на вопросы!", show_alert=True)
         return
     question_id = int(callback.data.split('_')[1])
-    await state.clear()  # Сброс состояния в группе
-    await callback.answer()
-    # Сохраняем, что этот пользователь ожидает ответ в ЛС
     reply_waiting[callback.from_user.id] = question_id
     await bot.send_message(
         chat_id=callback.from_user.id,
@@ -194,6 +234,7 @@ async def reply_btn(callback: CallbackQuery, state: FSMContext, bot):
             inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data=f"cancel_reply_{question_id}")]]
         )
     )
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("cancel_reply_"))
 async def cancel_reply(callback: CallbackQuery, state: FSMContext):
@@ -202,18 +243,18 @@ async def cancel_reply(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
 @router.message(StateFilter(None))
-async def get_reply_text(msg: Message, state: FSMContext, bot):
+async def get_reply_text(msg: Message, state: FSMContext, bot: Bot):
     if msg.chat.type != ChatType.PRIVATE:
-        return  # Не реагируем на сообщения вне лички
+        return
     if msg.from_user.id not in ADMINS:
-        return  # Только админ может отвечать
+        return
     question_id = reply_waiting.get(msg.from_user.id)
     if not question_id:
-        return  # Нет активного вопроса для ответа
+        return
+
     answer_text = msg.text
-    answer_user_id = msg.from_user.id
     answer_username = msg.from_user.username or "Без ника"
-    # Сохраняем ответ в БД и получаем инфу о вопросе
+
     async for session in get_session():
         q = await session.get(Question, question_id)
         if not q:
@@ -221,67 +262,43 @@ async def get_reply_text(msg: Message, state: FSMContext, bot):
             reply_waiting.pop(msg.from_user.id, None)
             return
         q.answer = answer_text
-        q.answer_user_id = answer_user_id
+        q.answer_user_id = msg.from_user.id
         q.answer_username = answer_username
         await session.commit()
         group_message_id = q.group_message_id
         user_id = q.user_id
-    # Отправляем ответ задавшему вопрос
+
     await bot.send_message(
         chat_id=user_id,
         text=f"Вам ответили на ваш вопрос:\n\n<blockquote>{q.question}</blockquote>\n\n<b>Ответ:</b> {answer_text}",
         parse_mode="HTML"
     )
-    # Редактируем сообщение в группе
+
     await bot.edit_message_text(
         chat_id=GROUP_CHAT_ID,
         message_id=group_message_id,
         text=f"<b>Отвечено ✅</b>\n\nВопрос:\n<blockquote>{q.question}</blockquote>\n\nОтвет:\n<blockquote>{answer_text}</blockquote>\n<b>Ответил:</b> @{answer_username}",
         parse_mode="HTML"
     )
+
     await msg.answer("Ответ отправлен и сообщение в группе обновлено!")
     reply_waiting.pop(msg.from_user.id, None)
     await state.clear()
 
+# --- Перезадать вопрос ---
 @router.callback_query(F.data.startswith("repeat_"))
-async def repeat_question(callback: CallbackQuery, bot):
+async def repeat_question(callback: CallbackQuery, bot: Bot):
     question_id = int(callback.data.split('_')[1])
-    # Получаем текст вопроса из БД
     async for session in get_session():
         q = await session.get(Question, question_id)
         if not q:
             await callback.answer("Вопрос не найден", show_alert=True)
             return
         text = f"<b>Перезадаём вопрос:</b>\n\n<blockquote>{q.question}</blockquote>"
-    await bot.send_message(
-        chat_id=GROUP_CHAT_ID,
-        text=text,
-        reply_markup=get_reply_kb(question_id),
-        parse_mode="HTML"
-    )
+    await bot.send_message(GROUP_CHAT_ID, text, reply_markup=get_reply_kb(question_id), parse_mode="HTML")
     await callback.answer("Вопрос перезадан!")
 
-@router.callback_query(F.data == "show_faq")
-async def show_faq(callback: CallbackQuery):
-    # Получаем все FAQ из БД
-    async for session in get_session():
-        faqs = (await session.execute(select(FAQ))).scalars().all()
-    if not faqs:
-        await callback.message.edit_text("FAQ пока пуст.", reply_markup=get_faq_inline_kb(callback.from_user.id in ADMINS))
-        await callback.answer()
-        return
-    text = "<b>FAQ 📚</b>\n\n"
-    for i, faq in enumerate(faqs, 1):
-        text += f"<b>{i}. {faq.question}</b>\n<blockquote>{faq.answer}</blockquote>\n\n"
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_faq_inline_kb(callback.from_user.id in ADMINS))
-    await callback.answer()
-
-@router.message(Command("admin"))
-async def admin_panel(msg: Message):
-    if msg.from_user.id not in ADMINS:
-        return
-    await msg.answer("Админ-панель FAQ:", reply_markup=admin_menu_kb)
-
+# --- Админ-панель ---
 @router.callback_query(F.data == "admin_add_faq")
 async def admin_add_faq(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMINS:
@@ -314,7 +331,6 @@ async def admin_edit_faq(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMINS:
         await callback.answer()
         return
-    # Получаем список FAQ
     async for session in get_session():
         faqs = (await session.execute(select(FAQ))).scalars().all()
     if not faqs:
@@ -376,7 +392,6 @@ async def admin_delete_faq(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMINS:
         await callback.answer()
         return
-    # Получаем список FAQ
     async for session in get_session():
         faqs = (await session.execute(select(FAQ))).scalars().all()
     if not faqs:
@@ -408,3 +423,15 @@ async def admin_delete_faq_id(msg: Message, state: FSMContext):
         await session.commit()
     await msg.answer("FAQ удалён!", reply_markup=admin_menu_kb)
     await state.clear()
+
+# --- Редактировать FAQ (админ) ---
+@router.message(lambda msg: msg.text == "Редактировать FAQ")
+async def admin_edit_faq_reply(msg: Message):
+    if msg.from_user.id not in ADMINS:
+        return
+    await msg.answer("Админ-панель FAQ:", reply_markup=admin_menu_kb)
+
+# --- DEBUG ---
+@router.message()
+async def debug_log(msg: Message):
+    logger.info(f"[DEBUG] user_id={msg.from_user.id}, text={msg.text!r}, state={msg.chat.type}")
