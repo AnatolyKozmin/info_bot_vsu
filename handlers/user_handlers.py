@@ -3,6 +3,7 @@ from sqlalchemy.future import select
 from database.engine import get_session
 from database.models import Question, FAQ
 from aiogram import Router, F
+import time
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -62,6 +63,9 @@ def get_faq_inline_kb(is_admin=False):
 # Глобальный словарь: user_id -> question_id (для ответов в ЛС)
 reply_waiting = {}
 
+# Глобальный словарь: user_id -> время последнего вопроса (timestamp)
+last_question_time = {}
+
 # Клавиатура главного меню
 main_menu_kb = InlineKeyboardMarkup(
     inline_keyboard=[
@@ -85,6 +89,14 @@ admin_menu_kb = InlineKeyboardMarkup(
     ]
 )
 
+# Клавиатура после отправки вопроса
+after_question_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="Задать ещё ✍️", callback_data="ask_question")],
+        [InlineKeyboardButton(text="FAQ 📚", callback_data="show_faq")]
+    ]
+)
+
 @router.message(CommandStart())
 async def start_cmd(msg: Message, state: FSMContext):
     is_admin = msg.from_user.id in ADMINS
@@ -104,6 +116,13 @@ async def admin_panel_btn(callback: CallbackQuery):
 
 @router.callback_query(F.data == "ask_question")
 async def ask_question_btn(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    now = time.time()
+    last_time = last_question_time.get(user_id, 0)
+    if now - last_time < 60:
+        await callback.answer(f"Можно задать вопрос раз в минуту! Подождите ещё {int(60 - (now - last_time))} сек.", show_alert=True)
+        return
+    last_question_time[user_id] = now
     await callback.message.edit_text("Напишите свой вопрос:", reply_markup=cancel_kb)
     await state.set_state(AskQuestion.waiting_for_question)
     await callback.answer()
@@ -155,7 +174,7 @@ async def anon_choice(callback: CallbackQuery, state: FSMContext, bot):
         q = await session.get(Question, question_id)
         q.group_message_id = sent.message_id
         await session.commit()
-    await callback.message.answer("Вопрос отправлен в группу!")
+    await callback.message.answer("Вопрос отправлен в группу!", reply_markup=after_question_kb)
     await state.clear()
 
 @router.callback_query(F.data.startswith("reply_"))
