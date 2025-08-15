@@ -206,7 +206,7 @@ async def anon_choice(msg: Message, state: FSMContext, bot: Bot):
         await session.refresh(q)
         question_id = q.id
 
-    head = f"<b><i>Аноним задал вопрос:</i></b> 🤔" if is_anon else f"<b><i>{msg.from_user.full_name} (@{username}) задал вопрос:</i></b> 🤔"
+    head = f"<b><i>{msg.from_user.full_name} (@{username}) задал вопрос:</i></b> 🤔" if is_anon else f"<b><i>{msg.from_user.full_name} (@{username}) задал вопрос:</i></b> 🤔"
     text = f'{head}\n\n<blockquote>{question}</blockquote>'
 
     sent = await bot.send_message(GROUP_CHAT_ID, text, reply_markup=get_reply_kb(question_id), parse_mode="HTML")
