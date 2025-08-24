@@ -36,14 +36,16 @@ class FAQAdmin(StatesGroup):
 # --- Клавиатуры ---
 main_menu_reply_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="FAQ 📚"), KeyboardButton(text="Задать вопрос ✍️")]
+        [KeyboardButton(text="FAQ 📚"), KeyboardButton(text="Задать вопрос ✍️")],
+        [KeyboardButton(text="О нас")]
     ],
     resize_keyboard=True
 )
 
 admin_menu_reply_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="FAQ 📚"), KeyboardButton(text="Задать вопрос ✍️"), KeyboardButton(text="Редактировать FAQ")]
+        [KeyboardButton(text="FAQ 📚"), KeyboardButton(text="Задать вопрос ✍️"), KeyboardButton(text="Редактировать FAQ")],
+        [KeyboardButton(text="О нас")]
     ],
     resize_keyboard=True
 )
@@ -448,6 +450,21 @@ async def admin_delete_faq_id(msg: Message, state: FSMContext):
 @router.message()
 async def debug_log(msg: Message):
     logger.info(f"[DEBUG] user_id={msg.from_user.id}, text={msg.text!r}, state={msg.chat.type}")
+
+# --- INFO ---
+@router.message(lambda msg: msg.text == "О нас")
+async def about_reply(msg: Message):
+    about_text = (
+        "Привет, студент!\n\n"
+        "Твои проблемы очень важны, и мы работаем, чтобы их решать. По всем срочным и сложным вопросам ты всегда можешь написать напрямую нам:\n\n"
+        "<b>Председатель Студенческого совета факультета ВШУ</b> — @anratnikovaa\n\n"
+        "<b>Заместитель Председателя по учебно-социальной деятельности</b> — @pollillixs\n\n"
+        "Подписывайся на наши медиа, чтобы быть в курсе всех событий:\n\n"
+        "<a href='https://vk.com/hsmedia'>HSMedia</a>\n"
+        "<a href='https://vk.com/hsmedia'>Студенческий совет ВШУ | Финансовый университет</a>\n"
+        "<a href='https://t.me/hsm_vshum'>ВШУм</a>"
+    )
+    await msg.answer(about_text, parse_mode="HTML")
 
 @router.message(lambda msg: msg.text == "Редактировать FAQ")
 async def admin_edit_faq_reply(msg: Message):

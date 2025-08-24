@@ -15,6 +15,7 @@ class Question(Base):
     answer_user_id = Column(BigInteger, nullable=True)
     answer_username = Column(String, nullable=True)
 
+
 class FAQ(Base):
     __tablename__ = 'faq'
     id = Column(Integer, primary_key=True, autoincrement=True)
