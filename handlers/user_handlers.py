@@ -320,10 +320,11 @@ async def get_reply_text(msg: Message, state: FSMContext, bot):
     )
 
     await bot.edit_message_text(
-        GROUP_CHAT_ID,
-        group_message_id,
-        f"<b>Отвечено ✅</b>\n\nВопрос:\n<blockquote>{q.question}</blockquote>\n\nОтвет:\n<blockquote>{answer_text}</blockquote>\n<b>Ответил:</b> @{answer_username}",
-        parse_mode="HTML"
+        chat_id=GROUP_CHAT_ID,
+        message_id=group_message_id,
+        text=f"<b>Отвечено ✅</b>\n\nВопрос:\n<blockquote>{q.question}</blockquote>\n\nОтвет:\n<blockquote>{answer_text}</blockquote>\n<b>Ответил:</b> @{answer_username}",
+        parse_mode="HTML",
+        reply_markup=None
     )
 
     await msg.answer("Ответ отправлен и сообщение в группе обновлено!")
