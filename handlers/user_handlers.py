@@ -1,6 +1,6 @@
 from sqlalchemy.future import select
 from database.engine import get_session
-from database.models import Question, FAQ
+from database.models import Question, FAQ, User
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -102,6 +102,31 @@ last_question_time = {}
 # --- Хендлер /start ---
 @router.message(CommandStart())
 async def start_cmd(msg: Message, state: FSMContext):
+    # Сохраняем или обновляем пользователя в БД
+    async for session in get_session():
+        # Проверяем, существует ли пользователь
+        result = await session.execute(select(User).where(User.tg_id == msg.from_user.id))
+        user = result.scalar_one_or_none()
+        
+        if user:
+            # Обновляем данные существующего пользователя
+            user.username = msg.from_user.username
+            user.first_name = msg.from_user.first_name
+            user.last_name = msg.from_user.last_name
+            logger.info(f"[INFO] Обновлен пользователь: {msg.from_user.id} (@{msg.from_user.username})")
+        else:
+            # Создаем нового пользователя
+            user = User(
+                tg_id=msg.from_user.id,
+                username=msg.from_user.username,
+                first_name=msg.from_user.first_name,
+                last_name=msg.from_user.last_name
+            )
+            session.add(user)
+            logger.info(f"[INFO] Новый пользователь зарегистрирован: {msg.from_user.id} (@{msg.from_user.username})")
+        
+        await session.commit()
+    
     # Приветственный текст для пользователя
     welcome_text = (
         "Привет, студент!\n\n"

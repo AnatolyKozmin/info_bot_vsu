@@ -1,7 +1,21 @@
-from sqlalchemy import Column, Integer, String, Boolean, BigInteger, Text
+from sqlalchemy import Column, Integer, String, Boolean, BigInteger, Text, DateTime
 from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime
 
 Base = declarative_base()
+
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tg_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    username = Column(String, nullable=True)
+    first_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_active = Column(Boolean, default=True)  # Для возможности исключить из рассылки
+
 
 class Question(Base):
     __tablename__ = 'questions'
