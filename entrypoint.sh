@@ -9,7 +9,6 @@ done
 
 echo "Применяем миграции..."
 python migrate.py
-python migrate_faq.py
 
 echo "Запуск бота..."
 exec python main.py
