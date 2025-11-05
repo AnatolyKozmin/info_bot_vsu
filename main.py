@@ -10,8 +10,8 @@ dp = Dispatcher(storage=MemoryStorage())
 
 
 def register_handlers():
+    dp.include_router(broadcast_handlers.router)  # Регистрируем первым, чтобы команды /rass и /stats работали
     dp.include_router(user_handlers.router)
-    dp.include_router(broadcast_handlers.router)
 
 
 async def main():
