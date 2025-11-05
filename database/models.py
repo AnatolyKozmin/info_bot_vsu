@@ -35,3 +35,13 @@ class FAQ(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=False)
+
+
+class BroadcastInteraction(Base):
+    """Таблица для отслеживания взаимодействий с рассылками"""
+    __tablename__ = 'broadcast_interactions'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    broadcast_id = Column(String, nullable=False, index=True)  # Уникальный ID рассылки
+    action = Column(String, nullable=False)  # 'opened', 'clicked', 'confirmed' и т.д.
+    created_at = Column(DateTime, default=datetime.utcnow)
